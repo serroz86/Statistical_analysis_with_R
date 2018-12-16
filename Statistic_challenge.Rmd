@@ -1,0 +1,194 @@
+---
+title: "R Notebook"
+output:
+  html_notebook: default
+  html_document:
+    df_print: paged
+  pdf_document: default
+numbersections: yes
+---
+
+
+# Statistical analysis: IGN game review
+
+### Introduction
+
+This R notebook uses the IGN game dataset.
+
+The goals/questions to answer are:
+
+* How do the sales relate to the scores, platform, genre or platform type?
+* Do the scores from IGN relate to the scores from other sources? For example, reviews from users collected from GameSpot.
+* What are the differences between the consoles from the same time period? For example, the consoles at the time period of PlayStation 2 vs. XBOX, PlayStation 1 vs Nintendo 64...
+
+I will perform some statistical analysis (Anderson-Darling normality test, Wilcoxon rank sum test with continuity correction, mean via Bootstrapping) and visualizations to answer the previous set of questions.
+
+### Data collection and Data cleaning
+
+I use the games scores and sales from VGChartz http://www.vgchartz.com which contains a compilation of scores from different webpages and critics for the last $\sim$40 years. The data has been obtained by scrapping the webpage and stored in a csv file.
+
+With python we have cleaned the data. In short, we performed the following:
+
++ We removed the fields with empty game name (unique)
++ We replaced the empty cells by NaNs
++ We created a new variable which groups the different platforms into three categories: Console, Handheld System and OS.
+
+```{r}
+library(ggplot2)
+library(gridExtra)
+library(pwr)
+library(gtools)
+library(nortest)
+library(boot)
+library(plyr)
+```
+
+```{r}
+df=read.csv("VG_final.csv")
+str(df)
+```
+
+
+### Data analysis and modelling
+
+We want to understand whether the game scores vary from year to year. We see how the scores vary as a function of the release year.
+
+```{r}
+pairs(~Year_of_Release+Critic_Score+User_Score,data=df)
+```
+
+We see that before 1996 there are not enough scores After that, it is really hard to see a variation of the scores with the year. We see that critic score and user score are related.
+
+```{r}
+pairs(~Year_of_Release[Year_of_Release>1996]+Critic_Score[Year_of_Release>1996]+User_Score[Year_of_Release>1996],data=df)
+```
+
+To see whether our variables show a normal distribution, we perform the 
+
+```{r}
+ad.test(df[df$Year_of_Release>1996,]$Year_of_Release)
+```
+
+The distribution is not normal, so we perform the non-parametric Wilcox test:
+
+```{r}
+wilcox.test(df[df$Year_of_Release>1996,]$Year_of_Release,df[df$Year_of_Release>1996,]$User_Score, paired=FALSE, alternative='greater')
+```
+So their means are not correlated.
+
+We see how the mean scores varies over years. For that, we do bootstrapping to compute the mean scores.
+
+```{r}
+# function to compute the mean through bootstrap
+boot_mean <- function(data){
+samples <- replicate(length(data), mean(sample(data, size = length(data), replace = TRUE)))
+  return(samples)
+}
+```
+
+
+
+
+
+```{r}
+means_year=NULL
+stds_year=NULL
+for (i in 1:length(unique(df$Year_of_Release))){
+  if (length(na.exclude(df[df$Year_of_Release==unique(df$Year_of_Release)[i],]$User_Score))>3){
+      means_year_distr=boot_mean(na.exclude(df[df$Year_of_Release==unique(df$Year_of_Release)[i],]$User_Score))
+     means_year[i]=mean(means_year_distr, na.rm = TRUE)
+     stds_year[i]=sd(means_year_distr, na.rm = TRUE)
+  } else{
+    means_year[i]=NA
+    stds_year[i]=NA
+  }
+}
+df_means_year=data.frame("years"=unique(df$Year_of_Release),"Means"=means_year,"Std"=stds_year)
+plot1= ggplot(df_means_year, aes(x = years,y=Means),color='blue') +
+  geom_errorbar(aes(ymin=Means-stds_year,ymax=Means+stds_year,color=Means))+labs(title = "Averages of User Scores", x = "Year", y = "Average score")+xlim(1995,2017)+ylim(6,9) +    geom_line()+geom_hline(aes(yintercept = mean(df_means_year$Means,na.rm = TRUE)),color='red',linetype="dashed", size = .4)
+```
+
+
+
+We plot the results:
+
+
+```{r}
+means_year=NULL
+stds_year=NULL
+for (i in 1:length(unique(df$Year_of_Release))){
+  if (length(na.exclude(df[df$Year_of_Release==unique(df$Year_of_Release)[i],]$Critic_Score))>3){
+      means_year_distr=boot_mean(na.exclude(df[df$Year_of_Release==unique(df$Year_of_Release)[i],]$Critic_Score))
+     means_year[i]=mean(means_year_distr, na.rm = TRUE)
+     stds_year[i]=sd(means_year_distr, na.rm = TRUE)
+  } else{
+    means_year[i]=NA
+    stds_year[i]=NA
+  }
+}
+df_means_year2=data.frame("years"=unique(df$Year_of_Release),"Means"=means_year,"Std"=stds_year)
+plot2= ggplot(df_means_year2, aes(x = years,y=Means),color='blue') +
+  geom_errorbar(aes(ymin=Means-stds_year,ymax=Means+stds_year,color=Means))+labs(title = "Averages of Critic Scores", x = "Year", y = "Average score") +    geom_line()+geom_hline(aes(yintercept = mean(df_means_year2$Means,na.rm = TRUE)),color='red',linetype="dashed", size = .4)+xlim(1995,2017)+ylim(60,90)
+
+```
+
+```{r fig2, fig.height = 4, fig.width = 10}
+grid.arrange(plot1,plot2,ncol=2)
+```
+
+
+### Which platform has the highest average reviews?
+
+We compare the average scores from both users and critics, and see which platform got the better reviews.
+
+```{r}
+means_plat=NULL
+stds_plat=NULL
+for (i in 1:length(levels(df$Platform))){
+  if (length(na.exclude(df[df$Platform==levels(df$Platform)[i],]$User_Score))>30){
+    means_plat_distr=boot_mean(na.exclude(df[df$Platform==levels(df$Platform)[i],]$User_Score))
+    means_plat[i]=mean(means_plat_distr, na.rm = TRUE)
+    stds_plat[i]=sd(means_plat_distr, na.rm = TRUE)
+    } else{
+    means_plat[i]=NA
+    stds_plat[i]=NA
+  }
+}
+df_means_plat=data.frame("Platform"=levels(df$Platform),"Means"=means_plat,"Std"=stds_plat)
+df_means_plat2=subset(df_means_plat,!(is.na(df_means_plat["Std"])))
+df_means_plat3=df_means_plat2[order(df_means_plat2$Means),]
+mean_of_means=('Average_of_means'=mean(df_means_plat2$Means))
+plot3= ggplot(df_means_plat3, aes(x = Platform,y=Means)) +
+  geom_errorbar(aes(ymin=Means-Std,ymax=Means+Std,color=Means))+labs(title = "Averages of User Scores per Platform", x = "Platform", y = "Average score") + geom_line() +geom_hline(aes(yintercept = mean_of_means),color='red',linetype="dashed", size = .4)+ylim(6,8)
+```
+
+
+
+```{r}
+means_plat=NULL
+stds_plat=NULL
+for (i in 1:length(levels(df$Platform))){
+  if (length(na.exclude(df[df$Platform==levels(df$Platform)[i],]$Critic_Score))>30){
+    means_plat_distr=boot_mean(na.exclude(df[df$Platform==levels(df$Platform)[i],]$Critic_Score))
+    means_plat[i]=mean(means_plat_distr, na.rm = TRUE)
+    stds_plat[i]=sd(means_plat_distr, na.rm = TRUE)
+    } else{
+    means_plat[i]=NA
+    stds_plat[i]=NA
+  }
+}
+df_means_plat4=data.frame("Platform"=levels(df$Platform),"Means"=means_plat,"Std"=stds_plat)
+df_means_plat5=subset(df_means_plat4,!(is.na(df_means_plat4["Std"])))
+df_means_plat6=df_means_plat5[order(df_means_plat5$Means),]
+mean_of_means2=('Average_of_means'=mean(df_means_plat6$Means))
+plot4= ggplot(df_means_plat6, aes(x = Platform,y=Means)) +
+  geom_errorbar(aes(ymin=Means-Std,ymax=Means+Std,color=Means))+labs(title = "Averages of Critic Scores per Platform", x = "Platform", y = "Average score") + geom_line() +geom_hline(aes(yintercept = mean_of_means2),color='red',linetype="dashed", size = .4)+ylim(60,80)
+```
+
+```{r fig1, fig.height = 8, fig.width = 10}
+grid.arrange(plot3,plot4,ncol=1)
+```
+
+
+
+
